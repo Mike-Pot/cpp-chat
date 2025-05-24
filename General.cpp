@@ -2,7 +2,8 @@
 
 void Logger::operator()(std::string s)
 {
-	std::cout << s << std::endl;
+	//std::cout << s << std::endl;
+	return;
 }
 
 tcp::socket* connector(io_context& io, const tcp::endpoint& ep)
