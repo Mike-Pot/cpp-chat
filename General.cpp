@@ -2,7 +2,8 @@
 
 void Logger::operator()(std::string s)
 {
-	std::cout << s << std::endl;
+	/*uncomment this string to turn logger on*/
+	//std::cout << s << std::endl;
 	return;
 }
 
