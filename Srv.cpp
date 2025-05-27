@@ -7,9 +7,6 @@ bool Server::start_server(ip::port_type server_port)
 			server_port));
 	threads.push_back(std::thread(&Server::server_shuttle, this, std::ref(in_messages),
 		std::ref(client_handlers)));
-
-	
-
 	bool finish = false;
 	while (!finish)
 	{
@@ -34,7 +31,7 @@ bool Server::start_server(ip::port_type server_port)
 
 Server::~Server()
 {	
-	put_quit_message(in_messages);
+	in_messages.put_quit_message();
 	for (auto ch : client_handlers)
 	{
 		delete ch;
@@ -54,24 +51,16 @@ void Server::server_shuttle(MessageQueue& in_messages, Handlers& client_handlers
 	bool finished = false;
 	while (!finished)
 	{
-		Messages messages = get_from_queue(in_messages);		
+		Messages messages = in_messages.get_from_queue();
 		for (auto& mes : messages)
 		{
-			switch (mes.id)
+			if (mes.type == QUIT)
 			{
-			case MES_QUIT:
 				finished = true;
-				mes = make_message("", "server disconncted");
-				break;
-			case  MES_DISCONNECT:
-				mes = make_message("", mes.author + " disconnected");
-				break;
-			default:
-				break;
 			}
 			for (auto c_h : client_handlers)
-			{				
-				put_to_queue(c_h->out_messages, mes);
+			{	
+				c_h->out_messages.put_to_queue(mes);
 			}
 		}
 	}
@@ -103,7 +92,7 @@ void Server::server_acceptor(io_context& io, ip::port_type server_port)
 
 ClientHandler::~ClientHandler()
 {
-	put_quit_message(out_messages);
+	out_messages.put_quit_message();
 	
 	if (in_sock)
 	{
@@ -137,19 +126,14 @@ bool ClientHandler::start_handler()
 	threads.push_back(std::thread(&ClientHandler::sender, this, out_sock, std::ref(out_messages)));
 	try
 	{
-		std::string login = get_content(in_sock);
-		if (!client_login(login))
-		{
-			handler_send_message("NAK");
-			return false;
-		}
-		handler_send_message("ACK");
-		name = get_content(in_sock);
+		std::string login = get_message(in_sock).author;		
+		out_messages.put_login_message(login, ACK);
+		name = get_message(in_sock).content;
 	}
 	catch (...)
 	{
-		logger("Error logging client");
-		put_quit_message(out_messages);
+		logger("Error logging client");		
+		out_messages.put_quit_message();
 		return false;
 	}
 	logger("Client login OK");
@@ -158,23 +142,7 @@ bool ClientHandler::start_handler()
 	return true;
 }
 
-void ClientHandler::handler_send_message(std::string cont)
-{
-	put_to_queue(out_messages, make_message(name, cont));
-}
-
 bool ClientHandler::client_login(std::string login)
 {
 	return true;
-}
-
-std::string ClientHandler::make_send_string(Mes& mes)
-{
-	return mes.a_length + mes.author + mes.c_length + mes.content;
-}
-
-void ClientHandler::get_message(tcp::socket* sock, MessageQueue& mes)
-{	
-	std::string content = get_content(sock);	
-	put_to_queue(serv_in_messages, make_message(name, content));
 }

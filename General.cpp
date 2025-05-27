@@ -2,7 +2,7 @@
 
 void Logger::operator()(std::string s)
 {
-	//std::cout << s << std::endl;
+	std::cout << s << std::endl;
 	return;
 }
 
@@ -25,18 +25,14 @@ tcp::socket* accept_connection(io_context& io, const tcp::endpoint& ep)
 	return sock;
 }
 
-std::string get_author(tcp::socket* sock)
-{	
-	int len = std::stoi(get_string(sock, A_LEN));	
-	return get_string(sock, len);
+ Mes get_message(tcp::socket* sock)
+{
+	std::string type = get_string(sock, T_LEN);
+	std::string author = get_string(sock, std::stoi(get_string(sock, A_LEN)));
+	std::string content = get_string(sock, std::stoi(get_string(sock, C_LEN)));
+	return make_message(type, author, content);
 }
-
-std::string get_content(tcp::socket* sock)
-{	
-	int len = std::stoi(get_string(sock, C_LEN));	
-	return get_string(sock, len);
-}
-
+ 
 std::string get_string(tcp::socket* sock, int ch_read)
 {
 	char buf[MAX_BUF];	
@@ -44,66 +40,97 @@ std::string get_string(tcp::socket* sock, int ch_read)
 	return std::string(buf,ch_read);
 }
 
-void put_to_queue(MessageQueue& mq, Mes mes)
+void MessageQueue::put_to_queue(Mes mes)
 {
-	std::unique_lock<std::mutex> lk(mq.mutex_);
-	mq.messages_.push_back(mes);
+	std::unique_lock<std::mutex> lk(mutex_);	
+	messages_.push_back(mes);
 	lk.unlock();
-	mq.event_.notify_all();
+	event_.notify_all();
 }
 
-Messages get_from_queue(MessageQueue& mq)
-{
-	std::unique_lock<std::mutex> lk(mq.mutex_);
-	mq.event_.wait(lk, [&] {
-		return (mq.messages_.size() > 0);
-		});	
-	Messages res(mq.messages_.begin(), mq.messages_.end());
-	mq.messages_.clear();	
+Messages MessageQueue::get_from_queue()
+{	
+	std::unique_lock<std::mutex> lk(mutex_);
+	event_.wait(lk, [&] {
+		return (messages_.size() > 0);
+		});
+	Messages res(messages_.begin(), messages_.end());
+	messages_.clear();
 	lk.unlock();
 	return res;
 }
-void put_quit_message(MessageQueue& mq)
+
+Messages MessageQueue::drain_queue()
 {
-	put_to_queue(mq, make_message("", "", MES_QUIT));
+	mutex_.lock();
+	Messages res(messages_.begin(), messages_.end());
+	messages_.clear();
+	mutex_.unlock();
+	return res;
 }
-void put_disconnect_message(MessageQueue& mq, std::string& name)
+
+void MessageQueue::put_quit_message()
 {
-	put_to_queue(mq, make_message(name, "", MES_DISCONNECT));
+	put_to_queue(make_message(QUIT, "", ""));
 }
-Mes make_message(const std::string& auth, const std::string& cont, int id)
+
+void OutMessageQueue::put_disconnect_message(const std::string& name)
+{	
+	put_to_queue(make_message(DISCONNECT, name, ""));
+}
+
+void OutMessageQueue::put_login_message(const std::string& login, const std::string& content)
+{
+	put_to_queue(make_message(LOGIN, login, content));
+}
+
+void OutMessageQueue::put_ordinary_message(const std::string& author, const std::string& content)
+{
+	put_to_queue(make_message(ORDINARY, author, content));
+}
+
+void OutMessageQueue::put_create_user_message(const std::string& name)
+{
+	put_to_queue(make_message(CREATE, USER, name));
+}
+
+void OutMessageQueue::put_create_room_message(const std::string& name)
+{
+	put_to_queue(make_message(CREATE, ROOM, name));
+}
+
+Mes make_message(const std::string& type, const std::string& auth,
+	const std::string& cont, int id)
 {
 	std::string sz_a = std::to_string(auth.size());
 	sz_a.resize(A_LEN, ' ');
 	std::string sz_c = std::to_string(cont.size());
 	sz_c.resize(C_LEN, ' ');	
-	return { id,sz_a,auth,sz_c,cont };
+	return { id,type,sz_a,auth,sz_c,cont };
 }
 
-void General::sender(tcp::socket* sock, MessageQueue& out_messages)
+void General::sender(tcp::socket* sock, OutMessageQueue& out_messages)
 {
 	logger("Sender thread started");
 	boost::system::error_code err;
 	bool finished = false;
-	std::unique_lock<std::mutex> lk(out_messages.mutex_);
 	while (!finished)
 	{
-		out_messages.event_.wait(lk, [&] {
-			return (out_messages.messages_.size() > 0);
-			});	
-		for (auto& mes : out_messages.messages_)
+		Messages messages = out_messages.get_from_queue();
+		for (auto& mes : messages)
 		{
-			if (mes.id == MES_QUIT || mes.id == MES_DISCONNECT)
+			if (mes.type == QUIT)
 			{
 				finished = true;
-			}			
-			write(*sock, buffer(make_send_string(mes)), err);
+			}
+			write(*sock,
+				buffer(mes.type + mes.a_length + mes.author + mes.c_length + mes.content),
+				err);
 			if (err)
 			{
-				logger("Error sending message");				
-			}			
+				logger("Error sending message");
+			}
 		}
-		out_messages.messages_.clear();
 	}	
 	logger("Sender thread finished");
 }
@@ -116,11 +143,11 @@ void General::getter(tcp::socket* sock, MessageQueue& in_messages)
 	{
 		try
 		{
-			get_message(sock, in_messages);			
+			Mes mes = get_message(sock);
+			in_messages.put_to_queue(mes);
 		}
 		catch (...)
-		{
-			put_disconnect_message(in_messages, name); 			
+		{		
 			finish = true;
 		}
 	}

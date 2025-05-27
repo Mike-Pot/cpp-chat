@@ -13,14 +13,10 @@ public:
 	~ClientHandler();
 	bool start_handler();
 private:
-	std::string make_send_string(Mes& mes) override;;
-	void get_message(tcp::socket* sock, MessageQueue& mes) override;
+	bool client_login(std::string login); //for now unused
 
-	void handler_send_message(std::string cont);
-	bool client_login(std::string login);
-
-	io_context& io;	
-	MessageQueue out_messages;
+	io_context& io;
+	OutMessageQueue out_messages;
 	MessageQueue& serv_in_messages;
 };
 

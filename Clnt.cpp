@@ -12,23 +12,18 @@ bool IoHandler::out(MessageQueue& mq)
 {
 	bool res = true;
 	console_mutex_.lock();
-	mq.mutex_.lock();		
-	for (auto& mes : mq.messages_)
+	Messages messages = mq.drain_queue();
+	for (auto& mes : messages)
 	{
-		switch(mes.id)
+		if (mes.type == QUIT)
 		{
-		case MES_QUIT:
 			res = false;
-			break;
-		default:
-			std::cout << mes.author << std::endl;
-			std::cout << mes.content << std::endl;
-			std::cout << std::endl;
-			break;
-		}
+			continue;
+		}		
+		std::cout << mes.author << std::endl;
+		std::cout << mes.content << std::endl;
+		std::cout << std::endl;	
 	}	
-	mq.messages_.clear();
-	mq.mutex_.unlock();
 	console_mutex_.unlock();
 	return res;
 }
@@ -51,7 +46,7 @@ void IoHandler::out_string(const std::string& s)
 
 Client::~Client()
 {	
-	put_quit_message(out_messages);
+	out_messages.put_quit_message();
 	
 	if (in_sock)
 	{
@@ -92,19 +87,18 @@ bool Client::start_client(ip::port_type client_port, ip::port_type server_port,
 	tcp::endpoint ep(ip::make_address(ANY_ADDR), client_port);
 	std::thread acc_thread(&Client::client_acceptor, this, std::ref(io),
 		std::ref(ep), &in_sock);
-	client_send_message(login_);
+	out_messages.put_login_message(login_);
 	acc_thread.join();	
 
 	threads.push_back(std::thread(&Client::getter, this, in_sock, std::ref(in_messages)));
-	Messages mes = get_from_queue(in_messages);
-	
-	if (mes.back().author != "" || mes.back().content != ACK)
+	Messages mes = in_messages.get_from_queue();
+	if(!check_login(mes.back(), login_))
 	{		
 		logger("Login failed");
 		return false;
 	}
 	logger("Login OK");
-	client_send_message(name);
+	out_messages.put_create_user_message(name);	
 	return true;
 }
 
@@ -120,7 +114,7 @@ void Client::client_work()
 			finish = true;
 			break;
 		case COMMANDS::SEND:
-			client_send_message(command.cont);
+			out_messages.put_ordinary_message(name, command.cont);
 			break;
 		case COMMANDS::SHOW:
 			finish = !io_handler.out(in_messages);
@@ -133,20 +127,13 @@ void Client::client_work()
 		}
 	}
 }
-std::string Client::make_send_string(Mes& mes)
-{
-	return mes.c_length + mes.content;
-}
 
-void Client::get_message(tcp::socket* sock, MessageQueue& mes)
+bool Client::check_login(Mes& mes, const std::string login)
 {
-	std::string author = get_author(sock);
-	std::string content = get_content(sock);
-	put_to_queue(in_messages, make_message(author, content));
+	bool res = false;
+	if (mes.type == LOGIN && mes.author == login && mes.content == ACK)
+	{
+		res = true;
+	}
+	return res;
 }
-
-void Client::client_send_message(std::string cont)
-{
-	put_to_queue(out_messages, make_message("", cont));
-}
-
